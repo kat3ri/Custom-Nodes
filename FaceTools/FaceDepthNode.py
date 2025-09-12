@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import torch
+import os
 from pathlib import Path
 from scipy.spatial import Delaunay
 from scipy.interpolate import LinearNDInterpolator
@@ -12,16 +13,37 @@ from mediapipe.tasks.python.vision import RunningMode
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-def safe_model_path(p):
-    path = Path(p).expanduser().resolve()
-    if not path.exists():
+def safe_model_path(relative_path):
+    # Find ComfyUI root directory by walking up from current file location
+    current_dir = Path(__file__).parent
+    comfyui_root = current_dir
+    
+    # Walk up directories until we find ComfyUI root
+    while comfyui_root.name != "ComfyUI" and comfyui_root.parent != comfyui_root:
+        comfyui_root = comfyui_root.parent
+    
+    # If we didn't find ComfyUI in the path, use current working directory
+    if comfyui_root.name != "ComfyUI":
+        comfyui_root = Path(os.getcwd())
+        # Try to find ComfyUI in current working directory
+        for item in comfyui_root.iterdir():
+            if item.is_dir() and item.name == "ComfyUI":
+                comfyui_root = item
+                break
+    
+    # Construct absolute path
+    model_path = comfyui_root / relative_path
+    model_path = model_path.resolve()
+    
+    if not model_path.exists():
         # Auto-download if missing
         url = "https://storage.googleapis.com/mediapipe-assets/face_landmarker.task"
-        print(f"Downloading model from {url} to {path}")
-        path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Downloading model from {url} to {model_path}")
+        model_path.parent.mkdir(parents=True, exist_ok=True)
         import urllib.request
-        urllib.request.urlretrieve(url, path)
-    return str(path)
+        urllib.request.urlretrieve(url, model_path)
+    
+    return str(model_path)
 
 
 
@@ -29,12 +51,12 @@ VisionRunningMode = mp.tasks.vision.RunningMode
 
 class FaceDepthMapNode:
     def __init__(self):
-        model_path = safe_model_path(r"D:\ComfyUI\models\face_alignment\face_landmarker.task")
-        if not Path(model_path).exists():
-            raise FileNotFoundError(f"Model not found at: {model_path}")
+        self.model_path = safe_model_path("models/face_alignment/face_landmarker.task")  # Relative to ComfyUI root
+        if not Path(self.model_path).exists():
+            raise FileNotFoundError(f"Model not found at: {self.model_path}")
 
         options = FaceLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=model_path),
+            base_options=BaseOptions(model_asset_path=self.model_path),
             num_faces=1,
             running_mode=VisionRunningMode.IMAGE,
         )
@@ -73,7 +95,7 @@ class FaceDepthMapNode:
             raise ValueError(f"Unsupported channel count: {image_np.shape[2]}")
 
 
-        print("Resolved model path:", MODEL_PATH)
+        print("Resolved model path:", self.model_path)
 
 
         image_np = np.ascontiguousarray(image_np, dtype=np.uint8)
