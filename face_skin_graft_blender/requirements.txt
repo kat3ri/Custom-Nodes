@@ -1,0 +1,3 @@
+mediapipe==0.10.15
+grpcio-status==1.62.3
+protobuf==4.25.5
