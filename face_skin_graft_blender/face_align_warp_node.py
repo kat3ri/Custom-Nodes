@@ -500,20 +500,23 @@ class FaceAlignWarpNode:
         Convert numpy mask to torch tensor with shape [1, 1, H, W].
         
         Args:
-            mask: numpy array mask
+            mask: numpy array mask (2D, 3D, or 4D)
             
         Returns:
             torch.Tensor with shape [1, 1, H, W]
         """
+        # Convert to grayscale if needed
+        if mask.ndim == 3:
+            if mask.shape[2] > 1:  # Multi-channel, take first channel
+                mask = mask[:, :, 0]
+            else:  # Single channel in 3D format
+                mask = mask[:, :, 0]
+        
+        # Add batch and channel dimensions
         if mask.ndim == 2:
             mask = mask[None, None, ...]  # [H, W] → [1, 1, H, W]
         elif mask.ndim == 3:
-            if mask.shape[0] == 1:
-                mask = mask[None, ...]  # [1, H, W] → [1, 1, H, W]
-            else:
-                mask = mask[None, None, ...]  # [H, W, C] → [1, 1, H, W, C] - then squeeze
-                if mask.ndim == 5:
-                    mask = mask[:, :, :, :, 0]  # Take first channel
+            mask = mask[None, ...]  # [1, H, W] → [1, 1, H, W]
         elif mask.ndim == 4:
             # Already has batch and channel dimensions
             pass
