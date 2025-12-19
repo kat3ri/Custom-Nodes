@@ -2,6 +2,7 @@
 # Refactored for MediaPipe 0.10.x compatibility
 # Compatible with MediaPipe tasks API and vision module
 
+import os
 import cv2
 import numpy as np
 import torch
@@ -127,6 +128,7 @@ class FaceAlignWarpNode:
         it will be retried during first use in the run() method.
         """
         self.landmarker = None
+        self.parsing_session = None  # ONNX session for face parsing, initialized separately
         self._init_error = None
         
         try:
@@ -140,7 +142,6 @@ class FaceAlignWarpNode:
     def _initialize_landmarker(self):
         """Initialize the landmarker - can be called multiple times."""
         # Try to use environment variable or default path
-        import os
         model_path_env = os.environ.get('FACE_LANDMARKER_MODEL_PATH', 'face_landmarker.task')
         model_path = safe_model_path(model_path_env)
         
@@ -269,7 +270,7 @@ class FaceAlignWarpNode:
 
             donor_lm_aug[shape_sensitive_indices] = donor_lm_aug[shape_sensitive_indices] * 0.92 + base_lm_aug[shape_sensitive_indices] * 0.08
 
-            # Reduce pull from outer face areas
+            # Reduce pull from outer face areas (apply soft blend before triangulation)
             jaw_indices = list(range(0, 17))
             side_face_indices = list(range(234, 454))
             soft_blend_indices = jaw_indices + side_face_indices
@@ -280,10 +281,6 @@ class FaceAlignWarpNode:
             h, w = base.shape[:2]
             warped_image = np.zeros_like(base)
             warped_mask = np.zeros((h, w), dtype=np.float32)
-
-            # Apply soft blend BEFORE triangulation
-            for idx in soft_blend_indices:
-                donor_lm_aug[idx] = donor_lm_aug[idx] * 0.7 + base_lm_aug[idx] * 0.3
 
             for tri_indices in tri.simplices:
                 t1 = np.float32([donor_lm_aug[i] for i in tri_indices])
@@ -438,9 +435,12 @@ class FaceAlignWarpNode:
             
             # Extract landmarks from first face
             landmark_list = result.face_landmarks[0]
+            
+            # MediaPipe returns normalized coordinates (0-1 range)
+            # Scale them to original image dimensions, not the resized 512x512
             h, w, _ = image.shape
             
-            # Convert normalized coordinates to pixel coordinates
+            # Convert normalized coordinates to pixel coordinates in original image space
             landmarks = np.array(
                 [[lm.x * w, lm.y * h, lm.z * w] for lm in landmark_list],
                 dtype=np.float32
@@ -496,10 +496,28 @@ class FaceAlignWarpNode:
         return torch.from_numpy(image).float()
 
     def np2tensor_mask(self, mask):
+        """
+        Convert numpy mask to torch tensor with shape [1, 1, H, W].
+        
+        Args:
+            mask: numpy array mask
+            
+        Returns:
+            torch.Tensor with shape [1, 1, H, W]
+        """
         if mask.ndim == 2:
-            mask = mask[None, None, ...]  # [1, 1, H, W]
+            mask = mask[None, None, ...]  # [H, W] → [1, 1, H, W]
         elif mask.ndim == 3:
-            mask = mask[None, ...]  # [1, H, W] → [1, 1, H, W]
+            if mask.shape[0] == 1:
+                mask = mask[None, ...]  # [1, H, W] → [1, 1, H, W]
+            else:
+                mask = mask[None, None, ...]  # [H, W, C] → [1, 1, H, W, C] - then squeeze
+                if mask.ndim == 5:
+                    mask = mask[:, :, :, :, 0]  # Take first channel
+        elif mask.ndim == 4:
+            # Already has batch and channel dimensions
+            pass
+        
         mask = np.clip(mask, 0, 255).astype(np.uint8)
         return torch.from_numpy(mask)
 
